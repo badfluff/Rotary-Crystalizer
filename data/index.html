@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rotary Crystalizer Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-shell">
+        <header id="header">
+            <div>
+                <h1>Rotary Crystalizer Dashboard</h1>
+                <p>Monitor temperature, control the target setpoint, and visualize live heating performance.</p>
+            </div>
+            <div class="status-pill" id="updateStatus">Waiting for data...</div>
+        </header>
+
+        <main>
+            <section class="panel metrics-panel">
+                <div class="metric-card">
+                    <span class="metric-label">Current Temperature</span>
+                    <span class="metric-value" id="temperature">0.0 °C</span>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-label">Target Temperature</span>
+                    <span class="metric-value" id="targetTemp">0.0 °C</span>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-label">Heating Power</span>
+                    <span class="metric-value" id="heatingPower">0%</span>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-label">P Term</span>
+                    <span class="metric-value" id="pTerm">0%</span>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-label">D Term</span>
+                    <span class="metric-value" id="dTerm">0%</span>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-label">I Term</span>
+                    <span class="metric-value" id="iTerm">0%</span>
+                </div>
+            </section>
+
+            <section class="panel controls-panel">
+                <div class="control-group">
+                    <label for="targetInput">Set Target Temperature</label>
+                    <div class="input-row">
+                        <input id="targetInput" type="number" placeholder="Enter °C">
+                        <button id="setTarget">Set Target</button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel chart-panel">
+                <div class="chart-header">
+                    <div>
+                        <h2>Live Temperature Trend</h2>
+                        <p class="chart-subtitle">The last 60 data points are shown in real time.</p>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="tempChart"></canvas>
+                </div>
+                <div class="chart-actions">
+                    <button id="beginLogging">Begin Logging</button>
+                </div>
+            </section>
+
+            <section class="panel logs-panel">
+                <div class="log-panel-header">
+                    <div>
+                        <h2>Log Sessions</h2>
+                        <p class="chart-subtitle">Each logging session becomes its own indexedDB log file.</p>
+                    </div>
+                    <div class="bulk-actions">
+                        <button id="downloadAllLogs">Download All</button>
+                        <button id="deleteAllLogs" class="danger">Delete All</button>
+                    </div>
+                </div>
+                <div id="logList" class="log-list"></div>
+            </section>
+        </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

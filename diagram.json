@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp1", "top": 60, "left": 10, "attrs": {} },
+    {
+      "type": "wokwi-led",
+      "id": "led1",
+      "top": 85.2,
+      "left": 172.16,
+      "attrs": { "color": "red" }
+    }
+  ],
+  "connections": [ [ "esp1:19", "led1:A", "green", [ "h0" ] ], [ "esp1:GND.2", "led1:C", "black", [ "v0" ] ] ],
+  "dependencies": {}
+}

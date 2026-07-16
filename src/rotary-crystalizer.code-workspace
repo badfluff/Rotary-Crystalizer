@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "../../../../../Arduino/rotary-crystalizer"
+		},
+		{
+			"name": "Rotary-Crystalizer",
+			"path": ".."
+		}
+	],
+	"settings": {
+		"liveServer.settings.multiRootWorkspaceName": "Rotary-Crystalizer"
+	}
+}
