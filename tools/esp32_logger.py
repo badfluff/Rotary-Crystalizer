@@ -19,6 +19,7 @@ from urllib.request import Request, urlopen
 
 DEFAULT_DB = os.path.join(os.path.dirname(__file__), 'esp32_data.db')
 DEFAULT_HOST = 'http://192.168.1.29'
+RECONNECT_DELAY = 3
 
 CREATE_SESSIONS_SQL = '''
 CREATE TABLE IF NOT EXISTS sessions (
@@ -250,7 +251,9 @@ class Recorder:
         self.session_id = None
         self.session_name = None
         self.thread = None
+        self.ws = None
         self.stop_event = threading.Event()
+        self.connected_event = threading.Event()
         self.stop_requested = False
         self.verbose = True
 
@@ -302,43 +305,54 @@ class Recorder:
 
     def _run(self):
         ws_url = make_ws_url(self.host)
-        try:
-            ws = WebSocketClient(ws_url, timeout=max(5, int(self.interval) + 5))
-        except Exception as exc:
-            print(f'WebSocket connect failed: {exc}')
-            self._finalize_session()
-            return
+        while not self.stop_event.is_set():
+            ws = None
+            try:
+                ws = WebSocketClient(ws_url, timeout=max(5, int(self.interval) + 5))
+                self.ws = ws
+                self.connected_event.set()
+                print(f'Connected to websocket {ws_url}')
 
-        print(f'Connected to websocket {ws_url}')
-
-        try:
-            while not self.stop_event.is_set():
-                try:
-                    message = ws.recv()
-                    if message is None:
+                while not self.stop_event.is_set():
+                    try:
+                        message = ws.recv()
+                        if message is None:
+                            continue
+                        temperature, target, heating_power, pterm, dterm, iterm = parse_ws_payload(message)
+                        self._log_reading(temperature, target, heating_power, pterm, dterm, iterm)
+                        if self.verbose:
+                            extra = ''
+                            if pterm is not None and dterm is not None and iterm is not None:
+                                extra = f' P={pterm:.3f} D={dterm:.3f} I={iterm:.3f}'
+                            print(f'[{datetime.now().isoformat()}] T={temperature:.2f}°C target={target:.2f}°C power={heating_power:.3f}{extra}')
+                    except socket.timeout:
                         continue
-                    temperature, target, heating_power, pterm, dterm, iterm = parse_ws_payload(message)
-                    self._log_reading(temperature, target, heating_power, pterm, dterm, iterm)
-                    if self.verbose:
-                        extra = ''
-                        if pterm is not None and dterm is not None and iterm is not None:
-                            extra = f' P={pterm:.3f} D={dterm:.3f} I={iterm:.3f}'
-                        print(f'[{datetime.now().isoformat()}] T={temperature:.2f}°C target={target:.2f}°C power={heating_power:.3f}{extra}')
-                except socket.timeout:
-                    continue
-                except ConnectionError as exc:
+                    except ValueError as exc:
+                        print(f'Failed to parse websocket payload: {exc}')
+                        continue
+            except (ConnectionError, OSError, ssl.SSLError) as exc:
+                if not self.stop_event.is_set():
                     print(f'WebSocket connection error: {exc}')
-                    break
-                except ValueError as exc:
-                    print(f'Failed to parse websocket payload: {exc}')
-                    continue
-                except Exception as exc:
+            except Exception as exc:
+                if not self.stop_event.is_set():
                     print(f'WebSocket error: {exc}')
-                    break
-        finally:
-            ws.close()
-            if not self.stop_requested:
-                self._finalize_session()
+            finally:
+                self.connected_event.clear()
+                if self.ws is ws:
+                    self.ws = None
+                if ws is not None:
+                    ws.close()
+
+            if not self.stop_event.is_set():
+                print(f'Reconnecting in {RECONNECT_DELAY} seconds...')
+                self.stop_event.wait(RECONNECT_DELAY)
+
+    def _start_thread(self):
+        self.stop_requested = False
+        self.stop_event.clear()
+        self.connected_event.clear()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
 
     def start(self, interval=None, name=None):
         if self.is_active():
@@ -348,11 +362,32 @@ class Recorder:
             self.interval = interval
         self.session_name = name or make_session_name()
         self.session_id = self._create_session(self.session_name)
-        self.stop_requested = False
-        self.stop_event.clear()
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
+        self._start_thread()
         print(f'Started session {self.session_id} ({self.session_name})')
+
+    def resume(self, session_id):
+        if self.is_active():
+            print('Recording is already active.')
+            return
+
+        with self.lock:
+            row = self.conn.execute(
+                'SELECT name, status FROM sessions WHERE id = ?', (session_id,)
+            ).fetchone()
+            if row is None:
+                print(f'No session found with id {session_id}.')
+                return
+            if row[1] == 'complete':
+                self.conn.execute(
+                    'UPDATE sessions SET stop_time = NULL, status = ? WHERE id = ?',
+                    ('active', session_id),
+                )
+                self.conn.commit()
+
+        self.session_id = session_id
+        self.session_name = row[0]
+        self._start_thread()
+        print(f'Resumed session {self.session_id} ({self.session_name})')
 
     def stop(self):
         if not self.is_active():
@@ -360,27 +395,37 @@ class Recorder:
             return
         self.stop_requested = True
         self.stop_event.set()
-        self.thread.join(timeout=self.interval + 2)
+        if self.ws is not None:
+            self.ws.close()
+        self.thread.join(timeout=max(5, self.interval + 2))
         if self.session_id is not None:
-            stop_session(self.conn, self.session_id)
-            print(f'Stopped recording session {self.session_id}.')
+            if self._close_db_session():
+                print(f'Stopped recording session {self.session_id}.')
+            else:
+                print(f'No active session found with id {self.session_id}.')
         self.session_id = None
         self.session_name = None
         self.thread = None
+        self.ws = None
+        self.connected_event.clear()
 
     def is_active(self):
         return self.thread is not None and self.thread.is_alive()
+
+    def is_connected(self):
+        return self.connected_event.is_set()
 
 
 def print_help():
     print('Available commands:')
     print('  start [interval] [name]   Start recording data. Interval defaults to 1 second.')
     print('                            If the first argument is not a number, it is treated as the session name.')
+    print('  resume <session_id>       Resume an existing session, including a completed one.')
     print('  stop                      Stop the active recording session.')
     print('  set-target <temperature>  Send a target temperature to the ESP32.')
     print('  verbose on|off            Toggle terminal readouts while recording.')
     print('  list                      Show all recorded sessions.')
-    print('  status                    Show the currently active session, if any.')
+    print('  status                    Show the recorder and database session status.')
     print('  export <session_id> [path]  Export a recording session to CSV. Use - for stdout.')
     print('  help                      Show this help text.')
     print('  exit                      Quit the application.')
@@ -408,6 +453,19 @@ def get_active_session(conn):
     return cursor.fetchone()
 
 
+def print_status(conn, recorder):
+    if recorder.is_active():
+        connection = 'connected' if recorder.is_connected() else 'reconnecting'
+        print(f'Recording session {recorder.session_id}: {recorder.session_name} ({connection})')
+        return
+
+    row = get_active_session(conn)
+    if row:
+        print(f'Active database session {row[0]}: {row[1]} (not currently recording in this app)')
+    else:
+        print('No active session.')
+
+
 def stop_session(conn, session_id=None):
     if session_id is None:
         row = get_active_session(conn)
@@ -416,8 +474,11 @@ def stop_session(conn, session_id=None):
             return
         session_id = row[0]
     now = datetime.now().isoformat()
-    conn.execute('UPDATE sessions SET stop_time = ?, status = ? WHERE id = ? AND status = ?', (now, 'complete', session_id, 'active'))
-    if conn.total_changes == 0:
+    cursor = conn.execute(
+        'UPDATE sessions SET stop_time = ?, status = ? WHERE id = ? AND status = ?',
+        (now, 'complete', session_id, 'active'),
+    )
+    if cursor.rowcount == 0:
         print(f'No active session found with id {session_id}.')
     else:
         conn.commit()
@@ -546,6 +607,14 @@ def repl(conn, host):
                 except ValueError:
                     name = ' '.join(args)
             recorder.start(interval=interval, name=name)
+        elif command == 'resume':
+            if len(args) != 1:
+                print('Usage: resume <session_id>')
+                continue
+            try:
+                recorder.resume(int(args[0]))
+            except ValueError:
+                print('Session ID must be a number.')
         elif command == 'stop':
             recorder.stop()
         elif command == 'set-target':
@@ -565,14 +634,9 @@ def repl(conn, host):
             recorder.set_verbose(enabled)
             print(f'Verbose readouts {'enabled' if enabled else 'disabled'}')
         elif command == 'list':
-            if recorder.is_active():
-                print(f'Active recorder session {recorder.session_id}: {recorder.session_name}')
-            else:
-                row = get_active_session(conn)
-                if row:
-                    print(f'Active database session {row[0]}: {row[1]} (not currently recording in this app)')
-                else:
-                    print('No active session.')
+            list_sessions(conn)
+        elif command == 'status':
+            print_status(conn, recorder)
         elif command == 'export':
             if len(args) == 0:
                 print('Usage: export <session_id> [path]')

@@ -5,3 +5,4 @@
 .vscode/ipch
 analyze/
 src/Secrets.hpp
+tools/

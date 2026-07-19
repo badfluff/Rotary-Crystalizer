@@ -48,11 +48,11 @@ static const unsigned long HEATER_PWM_PERIOD_MS = 2000;
 //        longer winds up during the long heat-up.
 //   Kd : brake against the tank's own rate of rise (per degree-per-second),
 //        split into rising/falling gains for the plant's push/coast asymmetry.
-static const float PID_KP = 0.04f;
+static const float PID_KP = 0.05f;
 static const float PID_KI = 0.0003f;
 // Rising temperature needs a strong brake to kill overshoot; a falling
 // temperature only needs a gentle nudge (the plant cools slowly on its own).
-static const float PID_KD_RISING = 5.0f;
+static const float PID_KD_RISING = 15.0f;
 static const float PID_KD_FALLING = 5.0f;
 // Rolling-window rate-of-change estimate (least-squares slope over this span).
 static const float PID_DERIV_WINDOW_S = 30.0f;
