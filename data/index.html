@@ -52,6 +52,15 @@
                         <button id="setTarget">Set Target</button>
                     </div>
                 </div>
+                <div class="control-group">
+                    <label for="profileSelect">Temperature Profile</label>
+                    <p class="control-help">Profiles are CSV files in <code>data/profiles</code> with <code>minutes,target_c</code> points.</p>
+                    <div class="input-row profile-actions">
+                        <select id="profileSelect" aria-label="Temperature profile"></select>
+                        <button id="startProfile">Start Profile</button>
+                        <button id="stopProfile" class="danger">Stop Profile</button>
+                    </div>
+                </div>
             </section>
 
             <section class="panel chart-panel">

@@ -5,6 +5,7 @@
 #include <LittleFS.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <stdlib.h>
 
 #include "LED.hpp"
 #include "PWMController.hpp"
@@ -97,6 +98,87 @@ unsigned long g_lastSampleMillis = 0;
 bool g_haveFirstSample = false;
 
 // ===========================================================================
+//  Temperature profile loading
+// ===========================================================================
+
+bool parseProfileFloat(const String &value, float &outValue) {
+  char *end = nullptr;
+  outValue = strtof(value.c_str(), &end);
+  while (end != nullptr && *end == ' ') {
+    ++end;
+  }
+  return end != value.c_str() && end != nullptr && *end == '\0' && isfinite(outValue);
+}
+
+bool loadProfile(const String &path, String &error) {
+  File file = LittleFS.open(path, "r");
+  if (!file || file.isDirectory()) {
+    error = "Profile file not found";
+    return false;
+  }
+
+  TemperatureController::ProfilePoint points[TemperatureController::MAX_PROFILE_POINTS];
+  size_t pointCount = 0;
+  while (file.available()) {
+    String line = file.readStringUntil('\n');
+    line.trim();
+    if (line.isEmpty() || line.startsWith("#")) {
+      continue;
+    }
+
+    const int comma = line.indexOf(',');
+    if (comma < 0) {
+      file.close();
+      error = "Each profile line must be minutes,target_c";
+      return false;
+    }
+
+    String minutesText = line.substring(0, comma);
+    String targetText = line.substring(comma + 1);
+    minutesText.trim();
+    targetText.trim();
+    if (pointCount == 0 && minutesText.equalsIgnoreCase("minutes")) {
+      continue; // Optional CSV header.
+    }
+
+    float minutes;
+    float targetC;
+    if (!parseProfileFloat(minutesText, minutes) || !parseProfileFloat(targetText, targetC)) {
+      file.close();
+      error = "Profile contains an invalid temperature point";
+      return false;
+    }
+    if (pointCount == TemperatureController::MAX_PROFILE_POINTS) {
+      file.close();
+      error = "Profile has too many points";
+      return false;
+    }
+    points[pointCount++] = {minutes, targetC};
+  }
+  file.close();
+
+  if (!controller.startProfile(points, pointCount, millis())) {
+    error = "Profile times must be non-negative and strictly increasing";
+    return false;
+  }
+  g_targetTempC = controller.target();
+  return true;
+}
+
+bool validProfileName(const String &name) {
+  if (!name.endsWith(".csv") || name.length() <= 4) {
+    return false;
+  }
+  for (size_t i = 0; i < name.length(); ++i) {
+    const char c = name[i];
+    if (!(isAlphaNumeric(c) || c == '-' || c == '_' || c == '.')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// ===========================================================================
 //  Network + web server
 // ===========================================================================
 
@@ -170,6 +252,32 @@ void setupServer() {
     request->send(200, "text/plain", String(g_targetTempC));
   });
 
+  server.on("/profiles", HTTP_GET, [](AsyncWebServerRequest *request) {
+    String payload = "[";
+    File directory = LittleFS.open("/profiles");
+    if (directory && directory.isDirectory()) {
+      File file = directory.openNextFile();
+      bool first = true;
+      while (file) {
+        String name = file.name();
+        if (!file.isDirectory() && name.endsWith(".csv")) {
+          const int slash = name.lastIndexOf('/');
+          name = name.substring(slash + 1);
+          if (!first) {
+            payload += ',';
+          }
+          payload += '"';
+          payload += name;
+          payload += '"';
+          first = false;
+        }
+        file = directory.openNextFile();
+      }
+    }
+    payload += ']';
+    request->send(200, "application/json", payload);
+  });
+
   ws.onEvent(onWsEvent);
   server.addHandler(&ws);
 
@@ -182,6 +290,32 @@ void setupServer() {
     } else {
       request->send(400, "text/plain", "Missing 'target' parameter");
     }
+  });
+
+  server.on("/startProfile", HTTP_POST, [](AsyncWebServerRequest *request) {
+    if (!request->hasParam("profile", true)) {
+      request->send(400, "text/plain", "Missing 'profile' parameter");
+      return;
+    }
+
+    const String name = request->getParam("profile", true)->value();
+    if (!validProfileName(name)) {
+      request->send(400, "text/plain", "Invalid profile filename");
+      return;
+    }
+
+    String error;
+    if (!loadProfile("/profiles/" + name, error)) {
+      request->send(400, "text/plain", error);
+      return;
+    }
+    request->send(200, "text/plain", "Profile started: " + name);
+  });
+
+  server.on("/stopProfile", HTTP_POST, [](AsyncWebServerRequest *request) {
+    controller.stopProfile();
+    g_targetTempC = controller.target();
+    request->send(200, "text/plain", "Profile stopped");
   });
 
   server.begin();
@@ -225,9 +359,10 @@ void runControlStep(unsigned long now, float tempC) {
   }
   g_lastSampleMillis = now;
 
-  const float power = controller.update(tempC, dt);
+  const float power = controller.update(tempC, dt, now);
 
   g_currentTempC = tempC;
+  g_targetTempC = controller.target();
   g_heatingPower = power;
   g_pTerm = controller.pid().pTerm();
   g_dTerm = controller.pid().dTerm();

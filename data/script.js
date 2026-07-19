@@ -6,6 +6,9 @@ const dTermElement = document.getElementById("dTerm");
 const iTermElement = document.getElementById("iTerm");
 const statusElement = document.getElementById("updateStatus");
 const setTargetButton = document.getElementById("setTarget");
+const profileSelect = document.getElementById("profileSelect");
+const startProfileButton = document.getElementById("startProfile");
+const stopProfileButton = document.getElementById("stopProfile");
 const loggingButton = document.getElementById("beginLogging");
 const logList = document.getElementById("logList");
 const downloadAllButton = document.getElementById("downloadAllLogs");
@@ -303,6 +306,75 @@ function sendTargetTemperature() {
       console.error('Error:', error);
       setStatus('Failed to set target temperature', true);
       alert('Failed to set target temperature.');
+    });
+}
+
+function loadProfiles() {
+  fetch('/profiles')
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error('Failed to load profiles');
+      }
+      return response.json();
+    })
+    .then((profiles) => {
+      profileSelect.innerHTML = '';
+      if (profiles.length === 0) {
+        const option = new Option('No profile files found', '');
+        profileSelect.add(option);
+        startProfileButton.disabled = true;
+        return;
+      }
+
+      profiles.forEach((profile) => profileSelect.add(new Option(profile, profile)));
+      startProfileButton.disabled = false;
+    })
+    .catch((error) => {
+      console.error('Error loading profiles:', error);
+      profileSelect.innerHTML = '';
+      profileSelect.add(new Option('Profiles unavailable', ''));
+      startProfileButton.disabled = true;
+    });
+}
+
+function startProfile() {
+  const profile = profileSelect.value;
+  if (!profile) {
+    return;
+  }
+
+  fetch('/startProfile', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: 'profile=' + encodeURIComponent(profile),
+  })
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error('Failed to start profile');
+      }
+      return response.text();
+    })
+    .then((message) => setStatus(message, false))
+    .catch((error) => {
+      console.error('Error starting profile:', error);
+      setStatus('Failed to start profile', true);
+    });
+}
+
+function stopProfile() {
+  fetch('/stopProfile', { method: 'POST' })
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error('Failed to stop profile');
+      }
+      return response.text();
+    })
+    .then((message) => setStatus(message, false))
+    .catch((error) => {
+      console.error('Error stopping profile:', error);
+      setStatus('Failed to stop profile', true);
     });
 }
 
@@ -653,6 +725,8 @@ function downloadCSV(csvContent, filename) {
 }
 
 setTargetButton.addEventListener('click', sendTargetTemperature);
+startProfileButton.addEventListener('click', startProfile);
+stopProfileButton.addEventListener('click', stopProfile);
 loggingButton.addEventListener('click', () => {
   logging = !logging;
   if (logging) {
@@ -671,5 +745,6 @@ deleteAllButton.addEventListener('click', deleteAllSessions);
 document.addEventListener('DOMContentLoaded', () => {
   initChart();
   connectWebSocket();
+  loadProfiles();
   loadSessions();
 });
